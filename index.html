@@ -8,7 +8,7 @@
   <style type="text/css">
     body {
       margin-top: 1.0em;
-      background-color: #a3679d;
+      background-color: #a3a3a3;
       font-family: Helvetica, Arial, FreeSans, san-serif;
       color: #000000;
     }
@@ -19,18 +19,34 @@
     h1 { font-size: 3.8em; color: #5c9862; margin-bottom: 3px; }
     h1 .small { font-size: 0.4em; }
     h1 a { text-decoration: none }
-    h2 { font-size: 1.5em; color: #5c9862; }
+    h2 { font-size: 1.5em; color: #000000; }
     h3 { text-align: center; color: #5c9862; }
-    a { color: #5c9862; }
+    a { color: #000022; }
     .description { font-size: 1.2em; margin-bottom: 30px; margin-top: 30px; font-style: italic;}
     .download { float: right; }
     pre { background: #000; color: #fff; padding: 15px;}
     hr { border: 0; width: 80%; border-bottom: 1px solid #aaa}
     .footer { text-align:center; padding-top:30px; font-style: italic; }
   </style>
+  <script>
+function supports_canvas() {
+  return !!document.createElement('canvas').getContext;
+}
+function supports_canvas_text() {
+  if (!supports_canvas()) { return false; }
+  var dummy_canvas = document.createElement('canvas');
+  var context = dummy_canvas.getContext('2d');
+  return typeof context.fillText == 'function';
+}
+function checkForCanvas() {
+  if (supports_canvas_text()) {
+      document.getElementById("hiddenSect").style.display = "block";
+  }
+}
+  </script>
 </head>
 
-<body>
+<body onload="checkForCanvas();">
   <a href="http://github.com/astangl/xroz"><img style="position: absolute; top: 0; right: 0; border: 0;" src="http://s3.amazonaws.com/github/ribbons/forkme_right_darkblue_121621.png" alt="Fork me on GitHub" /></a>
 
   <div id="container">
@@ -65,6 +81,10 @@
       by running:
       <pre>$ git clone git://github.com/astangl/xroz</pre>
     </p>
+    <div id="hiddenSect" style="display: none">
+    <h2>Demo</h2>
+        <p>Your browser appears to support HTML5 canvas, so you can play a demo crossword by clicking <a href="./xroz.html">here</a>. Use ? for help.</p>
+    </div>
 
     <div class="footer">
       get the source code on GitHub : <a href="http://github.com/astangl/xroz">astangl/xroz</a>
