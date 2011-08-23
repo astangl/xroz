@@ -3,7 +3,17 @@
 // Copyright 2011, Alex Stangl. All Rights Reserved.
 // Licensed under ISC license (see LICENSE file)
 
-/*jslint plusplus: true */
+//TODO handle shift or ctrl-arrow to jump by word
+//TODO handle printing error message if browser doesn't support canvas, or possibly fallback to using a table
+//TODO implement DELETE, backspace, Tab, Shift-Tab
+//TODO consider switching to NSEW direction and showing a light arrow in cursor cell
+//TODO handle hovering over clues/squares causing light highlight/cursor response
+//TODO save state
+//TODO better looking multi-column clue layout
+//TODO figure out whether using canvas is even a good idea (e.g., versus a table)
+//TODO handle rebuses
+//
+/*jslint browser: true, bitwise: true, plusplus: true */
 var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 (function () {
 	"use strict";
@@ -13,6 +23,13 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 		var retval = document.createElement(elementType);
 		parentElement.appendChild(retval);
 		return retval;
+	}
+
+	function appendText(text, textContainer, includeBreakBefore) {
+		if (includeBreakBefore) {
+			appendChild(textContainer, "br");
+		}
+		textContainer.appendChild(document.createTextNode(text));
 	}
 
 	function appendPara(text, textContainer) {
@@ -36,12 +53,21 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 		this.DIRECTION_ACROSS = 1;
 		this.DIRECTION_DOWN = -1;
 		this.DIRECTION_UNKNOWN = 0;
+		/*
+		this.DIRECTION_NORTH = 1;
+		this.DIRECTION_SOUTH = -1;
+		this.DIRECTION_EAST = 2;
+		this.DIRECTION_WEST = -2;
+		*/
 
 		this.toIndex = function (x, y) {
 			return y * this.width + x;
 		};
 		this.isBlack = function (x, y) {
 			return this.solution.charAt(this.toIndex(x, y)) === '.';
+		};
+		this.cursorBlack = function () {
+			return this.isBlack(this.cursorX, this.cursorY);
 		};
 		this.circled = function (index) {
 			return this.gext !== undefined && (getByte(this.gext, index) & 0x80) !== 0;
@@ -84,21 +110,33 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 				black = this.isBlack(x, y),
 				wordNbr = this.getWordNbr(x, y);
 			ctx.beginPath();
-			if (this.cursorX === x && this.cursorY === y) {
-				ctx.fillStyle = black ? "#440" : "#afa";
+			if (this.revealSolution) {
+				ctx.fillStyle = black ? "#000000" : this.solution[index] === this.grid[index] ? "#66ff66" : "#ff6666";
+			} else if (this.cursorX === x && this.cursorY === y) {
+				ctx.fillStyle = black ? "#444400" : "#aaffaa";
 			} else if (wordNbr !== 0 && this.highlightWordNbr === wordNbr) {
-				ctx.fillStyle = "#ffa";
+				ctx.fillStyle = "#ffffaa";
 			} else {
-				ctx.fillStyle = this.isBlack(x, y) ? "#000" : "#fff";
+				ctx.fillStyle = black ? "#000000" : "#ffffff";
 			}
 			ctx.fillRect(x * pixmult + pad + 1, y * pixmult + pad + 1, pixmult - 1, pixmult - 1);
 			if (!black) {
-				ctx.fillStyle = "#000";
+				ctx.fillStyle = "#000000";
 				ctx.font = (pixmult / 3).toString() + " px sans-serif";
 				ctx.textBaseline = "top";
 				ctx.textAlign = "left";
 				ctx.fillText(this.sqNbrs[index], x * pixmult + pad + 2, y * pixmult + pad);
-				if (this.grid.charAt(index) !== '-') {
+				if (this.revealSolution) {
+					ctx.font = (pixmult).toString() + " px sans-serif";
+					ctx.textBaseline = "top";
+					ctx.textAlign = "center";
+					if (this.grid.charAt(index) !== '-') {
+						ctx.fillStyle = "#888888";
+						ctx.fillText(this.grid.charAt(index), (x + 0.5) * pixmult + pad, y * pixmult + pad);
+					}
+					ctx.fillStyle = "#000000";
+					ctx.fillText(this.solution.charAt(index), (x + 0.5) * pixmult + pad, y * pixmult + pad);
+				} else if (this.grid.charAt(index) !== '-') {
 					ctx.font = (pixmult).toString() + " px sans-serif";
 					ctx.textBaseline = "top";
 					ctx.textAlign = "center";
@@ -108,7 +146,7 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 					ctx.beginPath();
 					ctx.arc(x * pixmult + pad + 1 + radius, y * pixmult + pad + 1 + radius, radius, 0, Math.PI * 2, true);
 					ctx.closePath();
-					ctx.strokeStyle = "#777";
+					ctx.strokeStyle = "#777777";
 					ctx.stroke();
 				}
 			}
@@ -121,7 +159,6 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 				td,
 				bold;
 			tbl = document.createElement("table");
-//			tbl.style.fontFamily = "arial";
 			textContainer.appendChild(tbl);
 			for (x = 0; x < clues.length; x += 2) {
 				tr = appendChild(tbl, "tr");
@@ -131,12 +168,24 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 				bold = appendChild(td, "b");
 				bold.appendChild(document.createTextNode(clues[x]));
 				td = appendChild(tr, "td");
-//				td.style.fontFamily = "arial, sans-serif";
-//				var asdf = document.createTextNode(this.strings[3 + clues[x + 1]]);
-//				asdf.style.fontFamily = "arial, sans-serif";
-//				td.appendChild(asdf);
 				td.appendChild(document.createTextNode(this.strings[3 + clues[x + 1]]));
 			}
+		};
+
+		// fill all cell contents
+		this.fillAll = function (ctx) {
+			var x, y;
+			for (y = 0; y < this.height; y++) {
+				for (x = 0; x < this.width; x++) {
+					this.fillCell(x, y, ctx);
+				}
+			}
+		};
+
+		// reveal the solution
+		this.showSolution = function () {
+			this.revealSolution = true;
+			this.fillAll(this.canv.getContext("2d"));
 		};
 		this.drawCanvas = function () {
 			var canv = this.canv,
@@ -153,11 +202,7 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 			canv.height = hpad + 1;
 
 			// fill cell contents
-			for (y = 0; y < this.height; y++) {
-				for (x = 0; x < this.width; x++) {
-					this.fillCell(x, y, ctx);
-				}
-			}
+			this.fillAll(ctx);
 			
 			// draw grid lines
 			ctx.beginPath();
@@ -169,7 +214,7 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 				ctx.moveTo(pad, y + pad);
 				ctx.lineTo(w + pad, y + pad);
 			}
-			ctx.strokeStyle = "#000";
+			ctx.strokeStyle = "#000000";
 			ctx.stroke();
 
 			// draw padding
@@ -184,12 +229,28 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 				ctx.moveTo(wpad + 0.5 - x, 0);
 				ctx.lineTo(wpad + 0.5 - x, hpad);
 			}
-			ctx.strokeStyle = "#fff";
+			ctx.strokeStyle = "#ffffff";
 			ctx.stroke();
 		};
 
 		this.drawBody = function () {
-			var textContainer = this.textContainer;
+			var textContainer = this.textContainer,
+				dv = document.createElement("div");
+			dv.id = "help";
+			dv.style.display = "none";
+			dv.style.borderStyle = "double";
+			dv.style.borderColor = "black";
+			dv.style.borderWidth = "4px";
+			dv.style.padding = "4px";
+			appendText("Arrow keys move cursor.", dv);
+			appendText("Letter keys enter letter.", dv, true);
+			appendText("? shows help.", dv, true);
+			appendText("! reveals solution.", dv, true);
+			appendText("Mouse click changes cursor position.", dv, true);
+			appendText("Mouse click in same cell toggles direction.", dv, true);
+			textContainer.appendChild(dv);
+			this.showingHelp = false;
+
 			appendPara(this.strings[0], textContainer);
 			appendPara("By " + this.strings[1], textContainer);
 			appendPara("", textContainer);
@@ -246,7 +307,7 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 				this.highlightWordNbr = 0;
 				this.refillHighlightExtent();
 				delete this.highlightWordExtent;
-				document.getElementById(this.highlightClueId).style.backgroundColor = "#fff";
+				document.getElementById(this.highlightClueId).style.backgroundColor = "#ffffff";
 				delete this.highlightClueId;
 			}
 		};
@@ -259,7 +320,7 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 				this.highlightWordExtent = this.getWordExtent();
 				this.refillHighlightExtent();
 				clueId = this.direction === this.DIRECTION_ACROSS ? "acrossClue" + wordNbr : "downClue" + wordNbr;
-				document.getElementById(clueId).style.backgroundColor = "#ffa";
+				document.getElementById(clueId).style.backgroundColor = "#ffffaa";
 				this.highlightClueId = clueId;
 			}
 		};
@@ -292,45 +353,122 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 			this.lastClickY = cursorY;
 		};
 
-		this.onkeydown = function (e) {
-			var oldx = this.cursorX,
-				oldy = this.cursorY,
-				kc = e.keyCode,
-				ctx = this.canv.getContext("2d");
-			if (kc === 37) {
-				if (oldx > 0) {
-					this.cursorX--;
+		// move cursor; f = function to keep calling as long as it returns true (should perform increment internally)
+		this.cursorMove = function (f) {
+			var oldx = this.cursorX, oldy = this.cursorY, ctx = this.canv.getContext("2d"), wordNbr;
+			// using apply on next line to be able pass this ptr
+			// NOTE: JSLint doesn't like empty block on next line but it seems spurious in this case
+			while (f.apply(this) && this.cursorBlack()) {}
+			if (this.cursorBlack()) {
+				// ended up in a black region and hit edge; revert to prev. position
+				this.cursorX = oldx;
+				this.cursorY = oldy;
+			} else if (oldx !== this.cursorX || oldy !== this.cursorY) {
+				wordNbr = this.getWordNbr(this.cursorX, this.cursorY);
+				if (wordNbr !== 0 && wordNbr !== this.highlightWordNbr) {
+					// moved onto different word; unhighlight old word, highlight new
+					this.unhighlightWord();
+					this.highlightWord();
 				}
-			} else if (kc === 38) {
-				if (oldy > 0) {
-					this.cursorY--;
-				}
-			} else if (kc === 39) {
-				if (oldx < this.width - 1) {
-					this.cursorX++;
-				}
-			} else if (kc === 40) {
-				if (oldy < this.height - 1) {
-					this.cursorY++;
-				}
-			}
-			if (oldx !== this.cursorX || oldy !== this.cursorY) {
 				this.fillCell(oldx, oldy, ctx);
 				this.fillCell(this.cursorX, this.cursorY, ctx);
 			}
+		};
+		this.moveLeftAndOkToMoveAgain = function () {
+			return --this.cursorX > 0;
+		};
+		this.moveRightAndOkToMoveAgain = function () {
+			return ++this.cursorX < this.width - 1;
+		};
+		this.moveUpAndOkToMoveAgain = function () {
+			return --this.cursorY > 0;
+		};
+		this.moveDownAndOkToMoveAgain = function () {
+			return ++this.cursorY < this.height - 1;
+		};
+		this.cursorLeft = function () {
+			if (this.cursorX > 0) {
+				this.cursorMove(this.moveLeftAndOkToMoveAgain);
+			}
+		};
+		this.cursorRight = function () {
+			if (this.cursorX < this.width - 1) {
+				this.cursorMove(this.moveRightAndOkToMoveAgain);
+			}
+		};
+		this.cursorUp = function () {
+			if (this.cursorY > 0) {
+				this.cursorMove(this.moveUpAndOkToMoveAgain);
+			}
+		};
+		this.cursorDown = function () {
+			if (this.cursorY < this.height - 1) {
+				this.cursorMove(this.moveDownAndOkToMoveAgain);
+			}
+		};
+		this.insertAndAdvance = function (charToInsert) {
+			var index = this.toIndex(this.cursorX, this.cursorY),
+				ctx = this.canv.getContext("2d");
+			if (this.grid.charAt(index) !== '.') {
+				this.grid = this.grid.substring(0, index) + charToInsert + this.grid.substring(index + 1);
+				this.fillCell(this.cursorX, this.cursorY, ctx);
+				if (this.direction === this.DIRECTION_ACROSS) {
+					this.cursorRight();
+				} else if (this.direction === this.DIRECTION_DOWN) {
+					this.cursorDown();
+				}
+				this.fillCell(this.cursorX, this.cursorY, ctx);
+			}
+		};
+		this.onkeydown = function (e) {
+			var kc = e.keyCode;
 			if (kc >= 37 && kc <= 40) {
+				if (kc === 37) {
+					this.cursorLeft();
+				} else if (kc === 38) {
+					this.cursorUp();
+				} else if (kc === 39) {
+					this.cursorRight();
+				} else if (kc === 40) {
+					this.cursorDown();
+				}
 				e.preventDefault();
 				// block arrow key event propagation
 				return false;
 			}
+			// Check for modifiers
+			if (kc === 16) {
+				this.shiftDown = true;
+			} else if (kc === 17) {
+				this.ctrlDown = true;
+			}
 			return true;
+		};
+		this.onkeyup = function (e) {
+			var kc = e.keyCode;
+			// Check for modifiers being released
+			if (kc === 16) {
+				this.shiftDown = false;
+			} else if (kc === 17) {
+				this.ctrlDown = false;
+			}
+		};
+
+		// display help in a popup
+		this.showHelp = function () {
+			document.getElementById("help").style.display = "block";
+			this.showingHelp = true;
+		};
+
+		// hide help
+		this.hideHelp = function () {
+			document.getElementById("help").style.display = "none";
+			this.showingHelp = false;
 		};
 
 		this.onkeypress = function (e) {
-			var index = this.cursorY * this.width + this.cursorX,
-				ctx = this.canv.getContext("2d"),
-				keynum,
-				keychar;
+			var keynum, keychar, charToInsert;
+			this.hideHelp();
 			if (window.event) { // IE
 				keynum = e.keyCode;
 			} else if (e.which) { // NS/Firefox/Opera
@@ -341,26 +479,22 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 				return this.zoomIn();
 			} else if (keychar === "-") {
 				return this.zoomOut();
+			} else if (keychar === "?") {
+				return this.showHelp();
+			} else if (keychar === " ") {
+				this.toggleDirection();
+				e.preventDefault();
+				return false;
+			} else if (keychar === "!") {
+				this.showSolution();
+				e.preventDefault();
+				return false;
 			}
-			if (keychar.match(/[A-Z ]/i)) {
-				if (this.grid.charAt(index) !== '.') {
-					this.grid = this.grid.substring(0, index) + keychar.toUpperCase() + this.grid.substring(index + 1);
-					if (this.direction === this.DIRECTION_ACROSS && this.cursorX < this.width - 1
-							&& !this.isBlack(this.cursorX + 1, this.cursorY)) {
-						this.cursorX = this.cursorX + 1;
-						this.fillCell(this.cursorX, this.cursorY, ctx);
-						this.fillCell(this.cursorX - 1, this.cursorY, ctx);
-					} else if (this.direction === this.DIRECTION_DOWN && this.cursorY < this.height - 1
-							&& !this.isBlack(this.cursorX, this.cursorY + 1)) {
-						this.cursorY = this.cursorY + 1;
-						this.fillCell(this.cursorX, this.cursorY, ctx);
-						this.fillCell(this.cursorX, this.cursorY - 1, ctx);
-					} else {
-						this.fillCell(this.cursorX, this.cursorY, ctx);
-					}
-					e.preventDefault();
-					return false;
-				}
+			if (keychar.match(/[A-Z _\/]/i)) {
+				charToInsert = keychar.match(/[_\/]/) ? " " : keychar.toUpperCase();
+				this.insertAndAdvance(charToInsert);
+				e.preventDefault();
+				return false;
 			}
 		};
 
@@ -491,7 +625,6 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 			if (sectName === "GEXT") {
 				retval.gext = bytes.substring(offset + 8, offset + 8 + len);
 			}
-			//TODO handle rebuses
 			offset += len + 9;
 			//alert("Extra section " + sectName);
 		}
@@ -521,7 +654,7 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 	}
 
 	function onkeypress(e) {
-		PUZAPP.puz.onkeypress(e);
+		return PUZAPP.puz.onkeypress(e);
 	}
 	function onclick(e) {
 		var x, y;
@@ -539,11 +672,15 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 	function onkeydown(e) {
 		return PUZAPP.puz.onkeydown(e);
 	}
+	function onkeyup(e) {
+		return PUZAPP.puz.onkeyup(e);
+	}
 
 	PUZAPP.drawPuzzle = drawPuzzle;
 	PUZAPP.drawPuzzleById = drawPuzzleById;
 	PUZAPP.onkeypress = onkeypress;
 	PUZAPP.onclick = onclick;
 	PUZAPP.onkeydown = onkeydown;
+	PUZAPP.onkeyup = onkeyup;
 }());
 
