@@ -4,8 +4,8 @@
 // Licensed under ISC license (see LICENSE file)
 
 //TODO handle shift or ctrl-arrow to jump by word
-//TODO handle printing error message if browser doesn't support canvas, or possibly fallback to using a table
-//TODO implement DELETE, backspace, Tab, Shift-Tab
+//TODO if browser doesn't support canvas, possibly fallback to using a table
+//TODO implement backspace, Tab, Shift-Tab
 //TODO consider switching to NSEW direction and showing a light arrow in cursor cell
 //TODO handle hovering over clues/squares causing light highlight/cursor response
 //TODO save state
@@ -14,7 +14,7 @@
 //TODO handle rebuses
 //
 /*jslint browser: true, bitwise: true, plusplus: true */
-var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
+var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 (function () {
 	"use strict";
 
@@ -81,14 +81,12 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 		this.zoomIn = function () {
 			this.pixmult++;
 			this.drawCanvas();
-			//return false;
 		};
 		this.zoomOut = function () {
 			if (this.pixmult > this.minPixmult) {
 				this.pixmult--;
 				this.drawCanvas();
 			}
-			//return false;
 		};
 
 		// return word associated with (x,y) based upon current direction, or 0 if N/A
@@ -182,10 +180,18 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 			}
 		};
 
-		// reveal the solution
+		// reveal the full solution
 		this.showSolution = function () {
 			this.revealSolution = true;
 			this.fillAll(this.canv.getContext("2d"));
+		};
+		// reveal correct contents for the single cell where the cursor is
+		this.showCellSolution = function () {
+			var x = this.cursorX,
+				y = this.cursorY,
+				index = this.toIndex(x, y);
+			this.grid = this.grid.substring(0, index) + this.solution.charAt(index) + this.grid.substring(index + 1);
+			this.fillCell(x, y, this.canv.getContext("2d"));
 		};
 		this.drawCanvas = function () {
 			var canv = this.canv,
@@ -245,7 +251,8 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 			appendText("Arrow keys move cursor.", dv);
 			appendText("Letter keys enter letter.", dv, true);
 			appendText("? shows help.", dv, true);
-			appendText("! reveals solution.", dv, true);
+			appendText("! reveals complete solution.", dv, true);
+			appendText("@ fills current square with correct letter.", dv, true);
 			appendText("Mouse click changes cursor position.", dv, true);
 			appendText("Mouse click in same cell toggles direction.", dv, true);
 			textContainer.appendChild(dv);
@@ -332,25 +339,41 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 		};
 
 		// handle mouse click in a cell
-		this.click = function (x, y) {
+		this.onclick = function (e) {
 			var canv = this.canv,
 				ctx = canv.getContext("2d"),
 				oldx = this.cursorX,
 				oldy = this.cursorY,
-				cursorX = Math.floor((x - canv.offsetLeft) / this.pixmult),
-				cursorY = Math.floor((y - canv.offsetTop) / this.pixmult);
+				cursorX,
+				cursorY,
+				x,
+				y;
+			if (e.pageX !== undefined && e.pageY !== undefined) {
+				x = e.pageX;
+				y = e.pageY;
+			} else {
+				x = e.clientX + document.body.scrollLeft +
+					document.documentElement.scrollLeft;
+				y = e.clientY + document.body.scrollTop +
+					document.documentElement.scrollTop;
+			}
+			cursorX = Math.floor((x - canv.offsetLeft) / this.pixmult);
+			cursorY = Math.floor((y - canv.offsetTop) / this.pixmult);
 			this.cursorX = cursorX;
 			this.cursorY = cursorY;
-
 			this.fillCell(oldx, oldy, ctx);
 			this.fillCell(cursorX, cursorY, ctx);
 			if (cursorX === this.lastClickX && cursorY === this.lastClickY) {
 				this.toggleDirection();
 			} else {
 				this.unhighlightWord();
+				this.highlightWord();
 			}
 			this.lastClickX = cursorX;
 			this.lastClickY = cursorY;
+			// block event propagation
+			e.preventDefault();
+			return false;
 		};
 
 		// move cursor; f = function to keep calling as long as it returns true (should perform increment internally)
@@ -406,18 +429,23 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 				this.cursorMove(this.moveDownAndOkToMoveAgain);
 			}
 		};
-		this.insertAndAdvance = function (charToInsert) {
+		this.insert = function (charToInsert) {
 			var index = this.toIndex(this.cursorX, this.cursorY),
 				ctx = this.canv.getContext("2d");
 			if (this.grid.charAt(index) !== '.') {
 				this.grid = this.grid.substring(0, index) + charToInsert + this.grid.substring(index + 1);
 				this.fillCell(this.cursorX, this.cursorY, ctx);
+			}
+		};
+		this.insertAndAdvance = function (charToInsert) {
+			var index = this.toIndex(this.cursorX, this.cursorY);
+			if (this.grid.charAt(index) !== '.') {
+				this.insert(charToInsert);
 				if (this.direction === this.DIRECTION_ACROSS) {
 					this.cursorRight();
 				} else if (this.direction === this.DIRECTION_DOWN) {
 					this.cursorDown();
 				}
-				this.fillCell(this.cursorX, this.cursorY, ctx);
 			}
 		};
 		this.onkeydown = function (e) {
@@ -434,6 +462,11 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 				}
 				e.preventDefault();
 				// block arrow key event propagation
+				return false;
+			}
+			if (kc === 46) {
+				this.insert(" ");
+				// block delete key event propagation
 				return false;
 			}
 			// Check for modifiers
@@ -476,9 +509,13 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 			}
 			keychar = String.fromCharCode(keynum);
 			if (keychar === "+") {
-				return this.zoomIn();
+				this.zoomIn();
+				e.preventDefault();
+				return false;
 			} else if (keychar === "-") {
-				return this.zoomOut();
+				this.zoomOut();
+				e.preventDefault();
+				return false;
 			} else if (keychar === "?") {
 				return this.showHelp();
 			} else if (keychar === " ") {
@@ -487,6 +524,10 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 				return false;
 			} else if (keychar === "!") {
 				this.showSolution();
+				e.preventDefault();
+				return false;
+			} else if (keychar === "@") {
+				this.showCellSolution();
 				e.preventDefault();
 				return false;
 			}
@@ -535,6 +576,14 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 			}
 		}
 		return offset;
+	}
+
+	function readContent(url) {
+		var xmlhttp = window.XMLHttpRequest ? new XMLHttpRequest() : new ActiveXObject("Microsoft.XMLHTTP");
+		xmlhttp.overrideMimeType('text/plain; charset=x-user-defined');
+		xmlhttp.open("GET", url, false);
+		xmlhttp.send();
+		return xmlhttp.responseText;
 	}
 
 	function parsePuz(bytes) {
@@ -631,56 +680,29 @@ var ActiveXObject, XMLHttpRequest, parsedPuz, filecontents, PUZAPP = {};
 		return retval;
 	}
 
-	function readContent(url) {
-		var xmlhttp = window.XMLHttpRequest ? new XMLHttpRequest() : new ActiveXObject("Microsoft.XMLHTTP");
-		xmlhttp.overrideMimeType('text/plain; charset=x-user-defined');
-		xmlhttp.open("GET", url, false);
-		xmlhttp.send();
-		return xmlhttp.responseText;
-	}
-
 	function drawPuzzle(puzUrl, canv, textContainer) {
 		var filecontents = readContent(puzUrl),
 			parsedPuz = parsePuz(filecontents);
 		PUZAPP.puz = parsedPuz;
 		parsedPuz.canv = canv;
 		parsedPuz.textContainer = textContainer;
+		// cursor right then left should leave cursor on first empty square, in case corner is black
 		PUZAPP.puz.drawCanvas();
 		PUZAPP.puz.drawBody();
+		parsedPuz.cursorRight();
+		parsedPuz.cursorLeft();
+		parsedPuz.highlightWord();
+		document.onkeypress = function (e) { return parsedPuz.onkeypress(e); };
+		document.onclick = function (e) { return parsedPuz.onclick(e); };
+		document.onkeydown = function (e) { return parsedPuz.onkeydown(e); };
+		document.onkeyup = function (e) { return parsedPuz.onkeyup(e); };
 	}
 
 	function drawPuzzleById(puzUrl, canvId, textContainerId) {
 		return drawPuzzle(puzUrl, document.getElementById(canvId), document.getElementById(textContainerId));
 	}
 
-	function onkeypress(e) {
-		return PUZAPP.puz.onkeypress(e);
-	}
-	function onclick(e) {
-		var x, y;
-		if (e.pageX !== undefined && e.pageY !== undefined) {
-			x = e.pageX;
-			y = e.pageY;
-		} else {
-			x = e.clientX + document.body.scrollLeft +
-				document.documentElement.scrollLeft;
-			y = e.clientY + document.body.scrollTop +
-				document.documentElement.scrollTop;
-		}
-		PUZAPP.puz.click(x, y);
-	}
-	function onkeydown(e) {
-		return PUZAPP.puz.onkeydown(e);
-	}
-	function onkeyup(e) {
-		return PUZAPP.puz.onkeyup(e);
-	}
-
 	PUZAPP.drawPuzzle = drawPuzzle;
 	PUZAPP.drawPuzzleById = drawPuzzleById;
-	PUZAPP.onkeypress = onkeypress;
-	PUZAPP.onclick = onclick;
-	PUZAPP.onkeydown = onkeydown;
-	PUZAPP.onkeyup = onkeyup;
 }());
 
