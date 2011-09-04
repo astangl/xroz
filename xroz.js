@@ -3,49 +3,73 @@
 // Copyright 2011, Alex Stangl. All Rights Reserved.
 // Licensed under ISC license (see LICENSE file)
 
+//TODO remove this.textContainer (replaced with leftContainer and rightContainer)
 //TODO handle shift or ctrl-arrow to jump by word
 //TODO if browser doesn't support canvas, possibly fallback to using a table
 //TODO implement backspace, Tab, Shift-Tab
 //TODO consider switching to NSEW direction and showing a light arrow in cursor cell
 //TODO handle hovering over clues/squares causing light highlight/cursor response
-//TODO save state
-//TODO better looking multi-column clue layout
+//TODO tweak multicolumn layout to improve look
 //TODO figure out whether using canvas is even a good idea (e.g., versus a table)
 //TODO handle rebuses
+//TODO consider switching to module paradigm
 //
 /*jslint browser: true, bitwise: true, plusplus: true */
 var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 (function () {
 	"use strict";
 
+	// return whether browser supports local storage
+	function supportsLocalStorage() {
+		try {
+			return window.localStorage !== undefined && window.localStorage !== null;
+		} catch (e) {
+			return false;
+		}
+	}
+
 	// return new child element of specified type, appended to parent
 	function appendChild(parentElement, elementType) { 
-		var retval = document.createElement(elementType);
-		parentElement.appendChild(retval);
-		return retval;
+		return parentElement.appendChild(document.createElement(elementType));
 	}
 
-	function appendText(text, textContainer, includeBreakBefore) {
+	// append text to specified element, optionally including a <br/> before it
+	function appendText(text, element, includeBreakBefore) {
 		if (includeBreakBefore) {
-			appendChild(textContainer, "br");
+			appendChild(element, "br");
 		}
-		textContainer.appendChild(document.createTextNode(text));
+		element.appendChild(document.createTextNode(text));
 	}
 
-	function appendPara(text, textContainer) {
-		var txt = document.createTextNode(text), para = document.createElement("p");
-		para.appendChild(txt);
-		textContainer.appendChild(para);
-	}
-
-	function appendBold(text, textContainer) {
-		var txt = document.createTextNode(text), para = document.createElement("p"), bold = appendChild(para, "b");
-		bold.appendChild(txt);
-		textContainer.appendChild(para);
+	// remove all children from specified DOM element
+	function removeChildren(element) {
+		while (element.hasChildNodes()) {
+			element.removeChild(element.firstChild);
+		}
 	}
 
 	function getByte(bytes, offset) {
 		return bytes.charCodeAt(offset) % 256;
+	}
+
+	// repeatedly pop items from start of array adding them to accumulator until either
+	// array exhausted or next element from array would cause accumulator to exceed threshold
+	// returns accumulator. arr is destructively modified, reflecting all the pops.
+	function popWhileLessThanOrEqual(threshold, arr) {
+		var acc = 0, l;
+		for (l = arr.length - 1; l >= 0 && arr[l] + acc <= threshold; --l) {
+			acc += arr.pop();
+		}
+		return acc;
+	}
+
+	// sum array
+	function sumArray(arr) {
+		var acc = 0, i;
+		for (i = 0; i < arr.length; ++i) {
+			acc += arr[i];
+		}
+		return acc;
 	}
 
 	function Puz() {
@@ -60,6 +84,64 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 		this.DIRECTION_WEST = -2;
 		*/
 
+		// event handling strategies
+		this.SAVESTATE_AND_BLOCK_EVENT = 1;
+		this.PROPAGATE_EVENT = 2;
+		this.BLOCK_EVENT = 3;
+
+		this.MIN_CLUE_COLUMN_GUTTER_WIDTH = 10;
+		this.MIN_CLUE_COLUMN_WIDTH = 5;
+		this.MAX_CLUE_COLUMN_WIDTH = 380;
+		this.BODY_MARGIN = 8;		// pixels margin around body
+
+		// names of (mutable) properties that are saved to local storage as the state
+		this.STATE_PROPERTIES = ["cursorX", "cursorY", "grid", "pixmult", "direction", "revealSolution",
+			"highlightWordNbr", "direction", "highlightWordExtent", "highlightClueId", "lastClickX", "lastClickY"];
+
+		// immutable fields (unchanged after initialization): CONSTANTS, solution, url,
+		//      supportsLocalStorage, width, height, gext, acrossWordNbrs, downWordNbrs,
+		//      padding (for now), sqNbrs, textContainer, strings, canv, minPixmult
+		//      version, nbrClues, acrossClues, downClues, leftContainer, rightContainer
+		// mutable fields: cursorX, cursorY, grid, pixmult, direction, revealSolution,
+		//      highlightWordNbr, showingHelp,
+		//      direction, highlightWordExtent, highlightClueId, lastClickX, lastClickY
+
+		// return key for putting state into local storage
+		this.storageKey = function () {
+			return "xroz." + this.url + ".state";
+		};
+
+		// save mutable state to local storage, if possible
+		// assume if canvas & local storage supported, then JSON is too
+		// NOTE: localStorage[] syntax doesn't seem to work w/ Chrome
+		this.saveState = function () {
+			var i, propName, state = {};
+			if (this.supportsLocalStorage) {
+				for (i = 0; i < this.STATE_PROPERTIES.length; ++i) {
+					propName = this.STATE_PROPERTIES[i];
+					state[propName] = this[propName];
+				}
+				window.localStorage.setItem(this.storageKey(), JSON.stringify(state));
+			}
+		};
+
+		// restore mutable state from local storage, if possible
+		// assume if canvas & local storage supported, then JSON is too
+		this.restoreState = function () {
+			var i, state, parsed, propName;
+			if (this.supportsLocalStorage) {
+				state = window.localStorage.getItem(this.storageKey());
+				if (state !== null) {
+					parsed = JSON.parse(state);
+					for (i = 0; i < this.STATE_PROPERTIES.length; ++i) {
+						propName = this.STATE_PROPERTIES[i];
+						if (parsed.hasOwnProperty(propName)) {
+							this[propName] = parsed[propName];
+						}
+					}
+				}
+			}
+		};
 		this.toIndex = function (x, y) {
 			return y * this.width + x;
 		};
@@ -120,12 +202,12 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 			ctx.fillRect(x * pixmult + pad + 1, y * pixmult + pad + 1, pixmult - 1, pixmult - 1);
 			if (!black) {
 				ctx.fillStyle = "#000000";
-				ctx.font = (pixmult / 3).toString() + " px sans-serif";
+				ctx.font = (pixmult / 3).toString() + "px sans-serif";
 				ctx.textBaseline = "top";
 				ctx.textAlign = "left";
 				ctx.fillText(this.sqNbrs[index], x * pixmult + pad + 2, y * pixmult + pad);
 				if (this.revealSolution) {
-					ctx.font = (pixmult).toString() + " px sans-serif";
+					ctx.font = (pixmult).toString() + "px sans-serif";
 					ctx.textBaseline = "top";
 					ctx.textAlign = "center";
 					if (this.grid.charAt(index) !== '-') {
@@ -135,37 +217,163 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 					ctx.fillStyle = "#000000";
 					ctx.fillText(this.solution.charAt(index), (x + 0.5) * pixmult + pad, y * pixmult + pad);
 				} else if (this.grid.charAt(index) !== '-') {
-					ctx.font = (pixmult).toString() + " px sans-serif";
+					ctx.font = (pixmult).toString() + "px sans-serif";
 					ctx.textBaseline = "top";
 					ctx.textAlign = "center";
 					ctx.fillText(this.grid.charAt(index), (x + 0.5) * pixmult + pad, y * pixmult + pad);
 				}
 				if (this.circled(index)) {
 					ctx.beginPath();
-					ctx.arc(x * pixmult + pad + 1 + radius, y * pixmult + pad + 1 + radius, radius, 0, Math.PI * 2, true);
+					ctx.arc(x * pixmult + pad + 1 + radius, y * pixmult + pad + 1 + radius,
+						radius, 0, Math.PI * 2, true);
 					ctx.closePath();
 					ctx.strokeStyle = "#777777";
 					ctx.stroke();
 				}
 			}
 		};
+
+		// Attempt to optimize layout by squeezing all clues onto screen, if possible, else minimize
+		// scrolling necessary. If able to squeeze all on screen, center content nice & evenly.
+		// First find optimal column width by trying all widths from min to max & find which
+		// width results in most extra horizontal space, if able to fit it all on the screen,
+		// or else width which results in least amount of extra height (scrolling)
+		// Technically we should compute twice, with & w/o vertical scrollbar, but we shouldn't
+		// be squeezing it in so tight that that really matters, so we will always assume space
+		// for scrollbar.
+		this.optimizeLayout = function () {
+			var i, j, colWidth, bestWidth = 150, fitsWindow = false, heights, extraWidth,
+				bestExtraWidth = 0, overflowY, bestOverflowY = 2E38, nbrLeftCols, nbrRightCols,
+				bestNbrLeftCols, bestNbrRightCols, bestLeftHeight, bestRightHeight,
+				canvHeight = this.canv.height, canvWidth = this.canv.width, leftmostCol, newCol, cutoffPoint,
+				html = document.getElementsByTagName("html")[0], colGutter = this.MIN_CLUE_COLUMN_GUTTER_WIDTH,
+				innerHeight = html.clientHeight - this.BODY_MARGIN * 2,
+				innerWidth = html.clientWidth - this.BODY_MARGIN * 2, colsToRemove, leftColHeight, rightColHeight;
+			this.leftContainer.style.overflow = "hidden";
+			leftColHeight = innerHeight;
+			rightColHeight = innerHeight - canvHeight;
+			for (i = this.MIN_CLUE_COLUMN_WIDTH; i <= this.MAX_CLUE_COLUMN_WIDTH; i += 5) {
+				this.leftContainer.style.width = i + "px";
+				colWidth = i;
+				if (this.leftContainer.scrollWidth === i) {
+					// First compute max # of columns we can squeeze into left & right, and leftover extraWidth
+					nbrRightCols = canvWidth < colWidth ? 0 : Math.floor((canvWidth - colWidth) / (colWidth + colGutter)) + 1;
+					nbrLeftCols = Math.floor((innerWidth - canvWidth) / (colWidth + colGutter));
+					extraWidth = (innerWidth - canvWidth) - nbrLeftCols * (colWidth + colGutter);
+
+					// Next store array of heights of each clue row, at our current colWidth
+					heights = [];
+					for (j = 0; j < this.leftContainer.childNodes.length; ++j) {
+						heights.push(this.leftContainer.childNodes[j].offsetHeight);
+					}
+					// try to fill right columns first, then left
+					colsToRemove = 0;
+					for (j = 0; j < nbrRightCols; ++j) {
+						if (heights.length === 0) {
+							colsToRemove++;
+						} else {
+							popWhileLessThanOrEqual(rightColHeight, heights);
+						}
+					}
+					nbrRightCols -= colsToRemove;
+					colsToRemove = 0;
+					for (j = 0; j < nbrLeftCols; ++j) {
+						if (heights.length === 0) {
+							extraWidth += colWidth + this.MIN_CLUE_COLUMN_GUTTER_WIDTH;
+							colsToRemove++;
+						} else {
+							popWhileLessThanOrEqual(leftColHeight, heights);
+						}
+					}
+					nbrLeftCols -= colsToRemove;
+					// anything left in heights is overflow;
+					// on the other hand, we may have underflow; one or more columns may not be full
+					if (heights.length === 0) {
+						fitsWindow = true;
+						if (extraWidth > bestExtraWidth) {
+							bestWidth = colWidth;
+							bestExtraWidth = extraWidth;
+							bestNbrLeftCols = nbrLeftCols;
+							bestNbrRightCols = nbrRightCols;
+						}
+					} else if (!fitsWindow) {
+						// normalize overflow by dividing by total # of columns, rounding up
+						overflowY = Math.ceil(sumArray(heights) / (nbrLeftCols + nbrRightCols));
+						if (overflowY < bestOverflowY) {
+							bestOverflowY = overflowY;
+							bestWidth = colWidth;
+							bestNbrLeftCols = nbrLeftCols;
+							bestNbrRightCols = nbrRightCols;
+						}
+					}
+				}
+			}
+			bestLeftHeight = fitsWindow ? innerHeight : innerHeight + bestOverflowY;
+			bestRightHeight = fitsWindow ? innerHeight - canvHeight : innerHeight - canvHeight + bestOverflowY;
+			i = Math.floor(bestExtraWidth / 2);
+			this.leftContainer.style.marginLeft = i + "px";
+			this.leftContainer.style.width = (innerWidth - this.canv.width - bestExtraWidth) + "px";
+			leftmostCol = document.createElement("div");
+			leftmostCol.style.marginRight = this.MIN_CLUE_COLUMN_GUTTER_WIDTH + "px";
+			leftmostCol.style.cssFloat = "left";
+			leftmostCol.style.width = bestWidth + "px";
+			this.leftContainer.appendChild(leftmostCol);
+			// pour all content from leftContainer into first column, so we have correct sizing to refer to
+			while (this.leftContainer.firstChild !== leftmostCol) {
+				leftmostCol.appendChild(this.leftContainer.firstChild);
+				if (leftmostCol.offsetHeight <= bestLeftHeight) {
+					cutoffPoint = leftmostCol.childNodes.length;   // note cutoff for first column
+				}
+			}
+			for (i = 1; i < bestNbrLeftCols; ++i) {
+				newCol = document.createElement("div");
+				newCol.style.marginRight = this.MIN_CLUE_COLUMN_GUTTER_WIDTH + "px";
+				newCol.style.cssFloat = "left";
+				newCol.style.width = bestWidth + "px";
+				this.leftContainer.appendChild(newCol);
+				while (cutoffPoint < leftmostCol.childNodes.length && newCol.offsetHeight + leftmostCol.childNodes[cutoffPoint].offsetHeight <= bestLeftHeight) {
+					newCol.appendChild(leftmostCol.childNodes[cutoffPoint]);
+				}
+			}
+			for (i = 0; i < bestNbrRightCols; ++i) {
+				newCol = document.createElement("div");
+				newCol.style.marginRight = (i === bestNbrRightCols - 1 ? 0 : this.MIN_CLUE_COLUMN_GUTTER_WIDTH) + "px";
+				newCol.style.cssFloat = "left";
+				newCol.style.width = bestWidth + "px";
+				this.rightContainer.appendChild(newCol);
+				while (cutoffPoint < leftmostCol.childNodes.length && newCol.offsetHeight + leftmostCol.childNodes[cutoffPoint].offsetHeight <= bestRightHeight) {
+					newCol.appendChild(leftmostCol.childNodes[cutoffPoint]);
+				}
+			}
+		};
+
+		// add set of clues to DOM
 		this.addCluesToDOM = function (clues, idPrefix) {
 			var textContainer = this.textContainer,
 				x,
 				tbl,
 				tr,
 				td,
-				bold;
-			tbl = document.createElement("table");
-			textContainer.appendChild(tbl);
+				dv;
+			tbl = textContainer; /* document.createElement("table"); */
+			//textContainer.appendChild(tbl);
 			for (x = 0; x < clues.length; x += 2) {
-				tr = appendChild(tbl, "tr");
+				//tr = appendChild(tbl, "tr");
+				dv = appendChild(tbl, "div");
+				dv.style.position = "relative";
+				//tr = appendChild(tbl, "div");
+				tr = appendChild(dv, "div");
 				tr.id = idPrefix + clues[x];
-				td = appendChild(tr, "td");
-				td.align = "right";
-				bold = appendChild(td, "b");
-				bold.appendChild(document.createTextNode(clues[x]));
-				td = appendChild(tr, "td");
+				//td = appendChild(tr, "td");
+				td = appendChild(tr, "div");
+				td.style.position = "absolute";
+				td.style.left = "-1em";
+				td.style.textAlign = "right";
+				td.style.width = "3em";
+				td.style.fontWeight = "bold";
+				td.appendChild(document.createTextNode(clues[x]));
+				td = appendChild(tr, "div");
+				td.style.marginLeft = "2.2em";
 				td.appendChild(document.createTextNode(this.strings[3 + clues[x + 1]]));
 			}
 		};
@@ -191,6 +399,7 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 				y = this.cursorY,
 				index = this.toIndex(x, y);
 			this.grid = this.grid.substring(0, index) + this.solution.charAt(index) + this.grid.substring(index + 1);
+			this.saveState();
 			this.fillCell(x, y, this.canv.getContext("2d"));
 		};
 		this.drawCanvas = function () {
@@ -253,21 +462,28 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 			appendText("? shows help.", dv, true);
 			appendText("! reveals complete solution.", dv, true);
 			appendText("@ fills current square with correct letter.", dv, true);
+			appendText("Ctrl-R clears all cells (resets grid)", dv, true);
 			appendText("Mouse click changes cursor position.", dv, true);
 			appendText("Mouse click in same cell toggles direction.", dv, true);
 			textContainer.appendChild(dv);
 			this.showingHelp = false;
 
-			appendPara(this.strings[0], textContainer);
-			appendPara("By " + this.strings[1], textContainer);
-			appendPara("", textContainer);
-			appendBold("ACROSS", textContainer);
+			dv = appendChild(textContainer, "div");
+			appendText(this.strings[0], dv);
+			appendText(this.strings[1], dv, true);
+			dv = appendChild(textContainer, "div");
+			dv.style.paddingTop = "60px";
+			dv.style.paddingLeft = "40px";
+			appendText("ACROSS", appendChild(dv, "b"));
 			this.addCluesToDOM(this.acrossClues, "acrossClue");
 
-			appendPara("", textContainer);
-			appendPara("", textContainer);
-			appendBold("DOWN", textContainer);
+			dv = appendChild(textContainer, "div");
+			dv.style.paddingTop = "60px";
+			dv.style.paddingLeft = "40px";
+			appendText("DOWN", appendChild(dv, "b"));
 			this.addCluesToDOM(this.downClues, "downClue");
+
+			this.optimizeLayout();
 		};
 
 		this.getWordExtent = function () {
@@ -332,6 +548,7 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 			}
 		};
 
+		// toggle across/down highlight direction
 		this.toggleDirection = function () {
 			this.unhighlightWord();
 			this.direction = -this.direction;
@@ -371,6 +588,7 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 			}
 			this.lastClickX = cursorX;
 			this.lastClickY = cursorY;
+			this.saveState();
 			// block event propagation
 			e.preventDefault();
 			return false;
@@ -448,6 +666,8 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 				}
 			}
 		};
+
+		// onkeydown event handler
 		this.onkeydown = function (e) {
 			var kc = e.keyCode;
 			if (kc >= 37 && kc <= 40) {
@@ -460,31 +680,19 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 				} else if (kc === 40) {
 					this.cursorDown();
 				}
+				this.saveState();
 				e.preventDefault();
 				// block arrow key event propagation
 				return false;
 			}
 			if (kc === 46) {
 				this.insert(" ");
+				this.saveState();
 				// block delete key event propagation
+				e.preventDefault();
 				return false;
 			}
-			// Check for modifiers
-			if (kc === 16) {
-				this.shiftDown = true;
-			} else if (kc === 17) {
-				this.ctrlDown = true;
-			}
 			return true;
-		};
-		this.onkeyup = function (e) {
-			var kc = e.keyCode;
-			// Check for modifiers being released
-			if (kc === 16) {
-				this.shiftDown = false;
-			} else if (kc === 17) {
-				this.ctrlDown = false;
-			}
 		};
 
 		// display help in a popup
@@ -499,7 +707,8 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 			this.showingHelp = false;
 		};
 
-		this.onkeypress = function (e) {
+		// onkeypress event handler
+		this.onkeypressImpl = function (e) {
 			var keynum, keychar, charToInsert;
 			this.hideHelp();
 			if (window.event) { // IE
@@ -510,33 +719,53 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 			keychar = String.fromCharCode(keynum);
 			if (keychar === "+") {
 				this.zoomIn();
-				e.preventDefault();
-				return false;
+				return this.SAVESTATE_AND_BLOCK_EVENT;
 			} else if (keychar === "-") {
 				this.zoomOut();
-				e.preventDefault();
-				return false;
+				return this.SAVESTATE_AND_BLOCK_EVENT;
 			} else if (keychar === "?") {
-				return this.showHelp();
+				this.showHelp();
+				return this.BLOCK_EVENT;
 			} else if (keychar === " ") {
 				this.toggleDirection();
-				e.preventDefault();
-				return false;
+				return this.SAVESTATE_AND_BLOCK_EVENT;
 			} else if (keychar === "!") {
 				this.showSolution();
-				e.preventDefault();
-				return false;
+				return this.SAVESTATE_AND_BLOCK_EVENT;
 			} else if (keychar === "@") {
 				this.showCellSolution();
-				e.preventDefault();
-				return false;
+				return this.SAVESTATE_AND_BLOCK_EVENT;
+			}
+			// If Ctrl-R hit, clear all cells and redraw canvas 
+			if (e.ctrlKey && keychar.toUpperCase() === "R") {
+				//this.grid = this.grid.replace(/[^-]/g, "-");
+				this.grid = this.grid.replace(/[A-Z]/g, "-");
+				this.drawCanvas();
+				return this.SAVESTATE_AND_BLOCK_EVENT;
 			}
 			if (keychar.match(/[A-Z _\/]/i)) {
 				charToInsert = keychar.match(/[_\/]/) ? " " : keychar.toUpperCase();
 				this.insertAndAdvance(charToInsert);
+				return this.SAVESTATE_AND_BLOCK_EVENT;
+			}
+			return this.PROPAGATE_EVENT;
+		};
+		this.onkeypress = function (e) {
+			var r = this.onkeypressImpl(e);
+			if (r === this.SAVESTATE_AND_BLOCK_EVENT) {
+				this.saveState();
+			}
+			if (r === this.SAVESTATE_AND_BLOCK_EVENT || r === this.BLOCK_EVENT) {
 				e.preventDefault();
 				return false;
 			}
+			if (r === this.PROPAGATE_EVENT) {
+				return true;
+			}
+			throw {
+				name: "BADEVENTRETURN",
+				message: "Unhandled event strategy '" + r + "'."
+			};
 		};
 
 		this.minPixmult = 22;
@@ -547,6 +776,10 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 		this.direction = this.DIRECTION_ACROSS;
 		this.lastClickX = -1;
 		this.lastClickY = -1;
+
+		// store flag indicating whether browser supports local storage.
+		//TODO this may be a premature optimization; figure out whether caching this is really worthwhile
+		this.supportsLocalStorage = supportsLocalStorage();
 	}
 
 	function getShort(bytes, offset) {
@@ -585,7 +818,6 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 		xmlhttp.send();
 		return xmlhttp.responseText;
 	}
-
 	function parsePuz(bytes) {
 		//TODO check checksums
 		var retval = new Puz(),
@@ -680,12 +912,27 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 		return retval;
 	}
 
-	function drawPuzzle(puzUrl, canv, textContainer) {
+	function drawPuzzle(puzUrl, puzContainer) {
 		var filecontents = readContent(puzUrl),
-			parsedPuz = parsePuz(filecontents);
+			parsedPuz = parsePuz(filecontents),
+			divl,
+			divr,
+			body = document.getElementsByTagName("body")[0];
+		body.style.borderWidth = parsedPuz.BODY_MARGIN + "px";
+		body.style.padding = "0px";
+		removeChildren(puzContainer);
+		divl = appendChild(puzContainer, "div");
+		divr = appendChild(puzContainer, "div");
+		divl.style.cssFloat = "left";
+		divr.style.cssFloat = "left";
 		PUZAPP.puz = parsedPuz;
-		parsedPuz.canv = canv;
-		parsedPuz.textContainer = textContainer;
+		parsedPuz.canv = appendChild(appendChild(divr, "div"), "canvas");
+		appendText("Your browser needs to support HTML5 canvas in order to view this page properly.", parsedPuz.canv, false);
+		parsedPuz.textContainer = divl;
+		parsedPuz.leftContainer = divl;
+		parsedPuz.rightContainer = divr;
+		parsedPuz.url = puzUrl;
+		parsedPuz.restoreState();
 		// cursor right then left should leave cursor on first empty square, in case corner is black
 		PUZAPP.puz.drawCanvas();
 		PUZAPP.puz.drawBody();
@@ -695,11 +942,10 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 		document.onkeypress = function (e) { return parsedPuz.onkeypress(e); };
 		document.onclick = function (e) { return parsedPuz.onclick(e); };
 		document.onkeydown = function (e) { return parsedPuz.onkeydown(e); };
-		document.onkeyup = function (e) { return parsedPuz.onkeyup(e); };
 	}
 
-	function drawPuzzleById(puzUrl, canvId, textContainerId) {
-		return drawPuzzle(puzUrl, document.getElementById(canvId), document.getElementById(textContainerId));
+	function drawPuzzleById(puzUrl, puzContainerId) {
+		return drawPuzzle(puzUrl, document.getElementById(puzContainerId));
 	}
 
 	PUZAPP.drawPuzzle = drawPuzzle;
