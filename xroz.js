@@ -156,6 +156,12 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 				}
 			}
 		};
+		this.innerHeight = function () {
+			return document.getElementsByTagName("html")[0].clientHeight - this.BODY_MARGIN * 2;
+		};
+		this.innerWidth = function () {
+			return document.getElementsByTagName("html")[0].clientWidth - this.BODY_MARGIN * 2;
+		};
 		this.toIndex = function (x, y) {
 			return y * this.width + x;
 		};
@@ -283,9 +289,9 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 				bestExtraWidth = 0, overflowY, bestOverflowY = 2E38, nbrLeftCols, nbrRightCols,
 				bestNbrLeftCols, bestNbrRightCols, r,
 				canvHeight = this.canv.height, canvWidth = this.canv.width, prevCol, cutoffPoint,
-				html = document.getElementsByTagName("html")[0], colGutter = this.MIN_CLUE_COLUMN_GUTTER_WIDTH,
-				innerHeight = html.clientHeight - this.BODY_MARGIN * 2,
-				innerWidth = html.clientWidth - this.BODY_MARGIN * 2, colsToRemove, leftColHeight, rightColHeight;
+				colGutter = this.MIN_CLUE_COLUMN_GUTTER_WIDTH,
+				innerHeight = this.innerHeight(), innerWidth = this.innerWidth(),
+				colsToRemove, leftColHeight, rightColHeight;
 			if (innerWidth <= canvWidth) {
 				// screen is too narrow, so don't bother trying fancy layout
 				return;
@@ -473,15 +479,17 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 			ctx.stroke();
 		};
 
-		this.drawBody = function () {
-			var leftContainer = this.leftContainer,
-				dv = document.createElement("div");
+		this.drawHelp = function () {
+			var dv = document.createElement("div"), body = document.getElementsByTagName("body")[0];
 			dv.id = "help";
-			dv.style.display = "none";
+			dv.style.display = "block";
+			dv.style.visibility = "hidden";
 			dv.style.borderStyle = "double";
 			dv.style.borderColor = "black";
+			dv.style.backgroundColor = "white";
 			dv.style.borderWidth = "4px";
-			dv.style.padding = "4px";
+			dv.style.padding = "10px";
+			dv.style.position = "absolute";
 			appendText("Arrow keys move cursor.", dv);
 			appendText("Letter keys enter letter.", dv, true);
 			appendText("Tab moves to next word in current direction.", dv, true);
@@ -495,9 +503,14 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 			appendText("Mouse click changes cursor position.", dv, true);
 			appendText("Mouse click in same cell toggles direction.", dv, true);
 			appendText("Space toggles direction.", dv, true);
-			leftContainer.appendChild(dv);
+			body.appendChild(dv);
+			dv.style.left = Math.floor((this.innerWidth() - dv.offsetWidth) / 2) + "px";
+			dv.style.top = Math.floor((this.innerHeight() - dv.offsetHeight) / 2) + "px";
 			this.showingHelp = false;
+		};
 
+		this.drawBody = function () {
+			var leftContainer = this.leftContainer, dv;
 			dv = appendChild(leftContainer, "div");
 			appendText(this.strings[0], dv);
 			appendText(this.strings[1], dv, true);
@@ -760,13 +773,13 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 
 		// display help in a popup
 		this.showHelp = function () {
-			document.getElementById("help").style.display = "block";
+			document.getElementById("help").style.visibility = "visible";
 			this.showingHelp = true;
 		};
 
 		// hide help
 		this.hideHelp = function () {
-			document.getElementById("help").style.display = "none";
+			document.getElementById("help").style.visibility = "hidden";
 			this.showingHelp = false;
 		};
 
@@ -1010,6 +1023,7 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 		parsedPuz.url = puzUrl;
 		parsedPuz.restoreState();
 		// cursor right then left should leave cursor on first empty square, in case corner is black
+		parsedPuz.drawHelp();
 		parsedPuz.drawCanvas();
 		parsedPuz.drawBody();
 		parsedPuz.cursorRight();
