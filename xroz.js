@@ -3,7 +3,7 @@
 // Copyright 2011, Alex Stangl. All Rights Reserved.
 // Licensed under ISC license (see LICENSE file)
 
-//TODO Improve look of help
+//TODO get feedback from users, esp. about keyboard shortcuts & suggestions for improvement
 //TODO Support selecting/reading PUZ files from local filesystem
 //TODO handle shift or ctrl-arrow to jump by word
 //TODO implement backspace
@@ -14,6 +14,7 @@
 //TODO figure out whether using canvas is even a good idea (e.g., versus a table)
 //TODO handle rebuses
 //TODO consider switching to module paradigm
+//TODO Improve look of help
 //
 /*jslint browser: true, bitwise: true, plusplus: true */
 var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
@@ -103,8 +104,8 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 		this.BLOCK_EVENT = 3;
 
 		this.MIN_CLUE_COLUMN_GUTTER_WIDTH = 10;
-		this.MIN_CLUE_COLUMN_WIDTH = 5;
-		this.MAX_CLUE_COLUMN_WIDTH = 380;
+		this.MIN_CLUE_COLUMN_WIDTH = 60;
+		this.MAX_CLUE_COLUMN_WIDTH = 300;
 		this.BODY_MARGIN = 8;		// pixels margin around body
 
 		// names of (mutable) properties that are saved to local storage as the state
@@ -156,6 +157,12 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 				}
 			}
 		};
+		this.innerHeight = function () {
+			return document.getElementsByTagName("html")[0].clientHeight - this.BODY_MARGIN * 2;
+		};
+		this.innerWidth = function () {
+			return document.getElementsByTagName("html")[0].clientWidth - this.BODY_MARGIN * 2;
+		};
 		this.toIndex = function (x, y) {
 			return y * this.width + x;
 		};
@@ -179,12 +186,14 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 		};
 		this.zoomIn = function () {
 			this.pixmult++;
-			this.drawCanvas();
+			this.onresize();
+			//this.drawCanvas();
 		};
 		this.zoomOut = function () {
 			if (this.pixmult > this.minPixmult) {
 				this.pixmult--;
-				this.drawCanvas();
+				this.onresize();
+				//this.drawCanvas();
 			}
 		};
 
@@ -283,16 +292,19 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 				bestExtraWidth = 0, overflowY, bestOverflowY = 2E38, nbrLeftCols, nbrRightCols,
 				bestNbrLeftCols, bestNbrRightCols, r,
 				canvHeight = this.canv.height, canvWidth = this.canv.width, prevCol, cutoffPoint,
-				html = document.getElementsByTagName("html")[0], colGutter = this.MIN_CLUE_COLUMN_GUTTER_WIDTH,
-				innerHeight = html.clientHeight - this.BODY_MARGIN * 2,
-				innerWidth = html.clientWidth - this.BODY_MARGIN * 2, colsToRemove, leftColHeight, rightColHeight;
+				colGutter = this.MIN_CLUE_COLUMN_GUTTER_WIDTH,
+				leftHeight = this.innerHeight(), rightHeight = leftHeight, innerWidth = this.innerWidth(),
+				colsToRemove, leftColHeight, rightColHeight;
 			if (innerWidth <= canvWidth) {
 				// screen is too narrow, so don't bother trying fancy layout
 				return;
 			}
+			// set left container wide first so we can get accurate height for first row
+			this.leftContainer.style.width = (innerWidth - this.canv.width) + "px";
+			leftHeight -= this.leftContainer.firstChild.offsetHeight;
 			this.leftContainer.style.overflow = "hidden";
-			leftColHeight = Math.max(innerHeight, canvHeight);
-			rightColHeight = Math.max(innerHeight - canvHeight, 0);
+			leftColHeight = Math.max(leftHeight, canvHeight);
+			rightColHeight = Math.max(rightHeight - canvHeight, 0);
 			for (i = this.MIN_CLUE_COLUMN_WIDTH; i <= this.MAX_CLUE_COLUMN_WIDTH; i += 5) {
 				this.leftContainer.style.width = i + "px";
 				colWidth = i;
@@ -304,7 +316,7 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 
 					// Next store array of heights of each clue row, at our current colWidth
 					heights = [];
-					for (j = 0; j < this.leftContainer.childNodes.length; ++j) {
+					for (j = 1; j < this.leftContainer.childNodes.length; ++j) {
 						heights.push(this.leftContainer.childNodes[j].offsetHeight);
 					}
 					// try to fill right columns first, then left
@@ -362,8 +374,8 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 			prevCol.style.width = bestWidth + "px";
 			this.leftContainer.appendChild(prevCol);
 			// pour all content from leftContainer into first column, so we have correct sizing to refer to
-			while (this.leftContainer.firstChild !== prevCol) {
-				prevCol.appendChild(this.leftContainer.firstChild);
+			while (this.leftContainer.childNodes[1] !== prevCol) {
+				prevCol.appendChild(this.leftContainer.childNodes[1]);
 				if (prevCol.offsetHeight <= leftColHeight) {
 					cutoffPoint = prevCol.childNodes.length;   // note cutoff for first column
 				}
@@ -473,15 +485,17 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 			ctx.stroke();
 		};
 
-		this.drawBody = function () {
-			var leftContainer = this.leftContainer,
-				dv = document.createElement("div");
+		this.drawHelp = function () {
+			var dv = document.createElement("div"), body = document.getElementsByTagName("body")[0];
 			dv.id = "help";
-			dv.style.display = "none";
+			dv.style.display = "block";
+			dv.style.visibility = "hidden";
 			dv.style.borderStyle = "double";
 			dv.style.borderColor = "black";
+			dv.style.backgroundColor = "white";
 			dv.style.borderWidth = "4px";
-			dv.style.padding = "4px";
+			dv.style.padding = "10px";
+			dv.style.position = "absolute";
 			appendText("Arrow keys move cursor.", dv);
 			appendText("Letter keys enter letter.", dv, true);
 			appendText("Tab moves to next word in current direction.", dv, true);
@@ -495,14 +509,24 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 			appendText("Mouse click changes cursor position.", dv, true);
 			appendText("Mouse click in same cell toggles direction.", dv, true);
 			appendText("Space toggles direction.", dv, true);
-			leftContainer.appendChild(dv);
+			body.appendChild(dv);
+			dv.style.left = Math.floor((this.innerWidth() - dv.offsetWidth) / 2) + "px";
+			dv.style.top = Math.floor((this.innerHeight() - dv.offsetHeight) / 2) + "px";
 			this.showingHelp = false;
+		};
 
+		this.drawBody = function () {
+			var leftContainer = this.leftContainer, dv, dv2;
+			// first stick in special first row that will contain info about the puzzle
 			dv = appendChild(leftContainer, "div");
-			appendText(this.strings[0], dv);
-			appendText(this.strings[1], dv, true);
+			dv.style.textAlign = "center";
+			dv.style.fontSize = "150%";
+			dv.style.paddingBottom = "10px";
+			dv2 = appendChild(dv, "div");
+			dv2.style.fontWeight = "bold";
+			appendText(this.strings[0], dv2);
+			appendText(this.strings[1], dv);
 			dv = appendChild(leftContainer, "div");
-			dv.style.paddingTop = "60px";
 			dv.style.paddingLeft = "40px";
 			appendText("ACROSS", appendChild(dv, "b"));
 			this.addCluesToDOM(this.acrossClues, "acrossClue");
@@ -760,13 +784,13 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 
 		// display help in a popup
 		this.showHelp = function () {
-			document.getElementById("help").style.display = "block";
+			document.getElementById("help").style.visibility = "visible";
 			this.showingHelp = true;
 		};
 
 		// hide help
 		this.hideHelp = function () {
-			document.getElementById("help").style.display = "none";
+			document.getElementById("help").style.visibility = "hidden";
 			this.showingHelp = false;
 		};
 
@@ -1010,6 +1034,7 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 		parsedPuz.url = puzUrl;
 		parsedPuz.restoreState();
 		// cursor right then left should leave cursor on first empty square, in case corner is black
+		parsedPuz.drawHelp();
 		parsedPuz.drawCanvas();
 		parsedPuz.drawBody();
 		parsedPuz.cursorRight();
