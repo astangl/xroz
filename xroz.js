@@ -400,6 +400,7 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 			for (i = 0; i < clues.length; i += 2) {
 				dv = appendChild(leftContainer, "div");
 				dv.style.position = "relative";
+				dv.style.fontSize = "10pt";
 				row = appendChild(dv, "div");
 				row.id = idPrefix + clues[i];
 				dv = appendChild(row, "div");
