@@ -259,26 +259,6 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 			}
 		};
 
-		// create new column, pouring clues into it from the previous column's cutoff point
-		// If not trying to squeeze onto screen or align with canvas, allowOverflow = true allows
-		// a row to exceed cutoff by half its height. This yields better results in overflow scenarios.
-		// returns [newCol, newCutoffPoint]
-		this.createColumn = function (container, width, margin, prevCol, cutoffPoint, colHeight, allowOverflow) {
-			var newCol = document.createElement("div"), rowHeight, newCutoffPoint;
-			newCol.style.marginRight = margin + "px";
-			newCol.style.cssFloat = "left";
-			newCol.style.width = width + "px";
-			container.appendChild(newCol);
-			while (cutoffPoint < prevCol.childNodes.length) {
-				rowHeight = prevCol.childNodes[cutoffPoint].offsetHeight;
-				newCol.appendChild(prevCol.childNodes[cutoffPoint]);
-				if (newCol.offsetHeight <= colHeight || (allowOverflow && newCol.offsetHeight - rowHeight / 2 <= colHeight)) {
-					newCutoffPoint = newCol.childNodes.length;
-				}
-			}
-			return [newCol, newCutoffPoint];
-		};
-
 		// Attempt to optimize layout by squeezing all clues onto screen, if possible, else minimize
 		// scrolling necessary. If able to squeeze all on screen, center content nice & evenly.
 		// First find optimal column width by trying all widths from min to max & find which
@@ -290,8 +270,8 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 		this.optimizeLayout = function () {
 			var i, j, colWidth, bestWidth = 150, fitsWithoutOverflow = false, heights, extraWidth,
 				bestExtraWidth = 0, overflowY, bestOverflowY = 2E38, nbrLeftCols, nbrRightCols,
-				bestNbrLeftCols, bestNbrRightCols, r,
-				canvHeight = this.canv.height, canvWidth = this.canv.width, prevCol, cutoffPoint,
+				bestNbrLeftCols, bestNbrRightCols, heightMult, newCol,
+				canvHeight = this.canv.height, canvWidth = this.canv.width, leftmostCol, cutoffPoint,
 				colGutter = this.MIN_CLUE_COLUMN_GUTTER_WIDTH,
 				leftHeight = this.innerHeight(), rightHeight = leftHeight, innerWidth = this.innerWidth(),
 				colsToRemove, leftColHeight, rightColHeight;
@@ -368,29 +348,43 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 			i = Math.floor(bestExtraWidth / 2);
 			this.leftContainer.style.marginLeft = i + "px";
 			this.leftContainer.style.width = (innerWidth - this.canv.width - bestExtraWidth) + "px";
-			prevCol = document.createElement("div");
-			prevCol.style.marginRight = this.MIN_CLUE_COLUMN_GUTTER_WIDTH + "px";
-			prevCol.style.cssFloat = "left";
-			prevCol.style.width = bestWidth + "px";
-			this.leftContainer.appendChild(prevCol);
+			leftmostCol = document.createElement("div");
+			leftmostCol.style.marginRight = this.MIN_CLUE_COLUMN_GUTTER_WIDTH + "px";
+			leftmostCol.style.cssFloat = "left";
+			leftmostCol.style.width = bestWidth + "px";
+			this.leftContainer.appendChild(leftmostCol);
 			// pour all content from leftContainer into first column, so we have correct sizing to refer to
-			while (this.leftContainer.childNodes[1] !== prevCol) {
-				prevCol.appendChild(this.leftContainer.childNodes[1]);
-				if (prevCol.offsetHeight <= leftColHeight) {
-					cutoffPoint = prevCol.childNodes.length;   // note cutoff for first column
+			while (this.leftContainer.childNodes[1] !== leftmostCol) {
+				leftmostCol.appendChild(this.leftContainer.childNodes[1]);
+				if (leftmostCol.offsetHeight <= leftColHeight) {
+					cutoffPoint = leftmostCol.childNodes.length;   // note cutoff for first column
 				}
 			}
+			// multiplier to use when considering height of next row to add; if exactly filling screen,
+			// consider full height of row; otherwise consider half row height to allow some overflow
+			heightMult = fitsWithoutOverflow ? 1 : 0.5;
 			for (i = 1; i < bestNbrLeftCols; ++i) {
-				r = this.createColumn(this.leftContainer, bestWidth, this.MIN_CLUE_COLUMN_GUTTER_WIDTH,
-					prevCol, cutoffPoint, leftColHeight, !fitsWithoutOverflow);
-				prevCol = r[0];
-				cutoffPoint = r[1];
+				newCol = document.createElement("div");
+				newCol.style.marginRight = this.MIN_CLUE_COLUMN_GUTTER_WIDTH + "px";
+				newCol.style.cssFloat = "left";
+				newCol.style.width = bestWidth + "px";
+				this.leftContainer.appendChild(newCol);
+				while (cutoffPoint < leftmostCol.childNodes.length &&
+						newCol.offsetHeight + heightMult * leftmostCol.childNodes[cutoffPoint].offsetHeight <= leftColHeight) {
+					newCol.appendChild(leftmostCol.childNodes[cutoffPoint]);
+				}
 			}
 			for (i = 0; i < bestNbrRightCols; ++i) {
-				r = this.createColumn(this.rightContainer, bestWidth, i === bestNbrRightCols - 1 ? 0 : this.MIN_CLUE_COLUMN_GUTTER_WIDTH,
-					prevCol, cutoffPoint, rightColHeight, !fitsWithoutOverflow);
-				prevCol = r[0];
-				cutoffPoint = r[1];
+				newCol = document.createElement("div");
+				newCol.style.marginRight = (i === bestNbrRightCols - 1 ? 0 : this.MIN_CLUE_COLUMN_GUTTER_WIDTH) + "px";
+				newCol.style.cssFloat = "left";
+				newCol.style.width = bestWidth + "px";
+				this.rightContainer.appendChild(newCol);
+				while (cutoffPoint < leftmostCol.childNodes.length &&
+						(newCol.offsetHeight + heightMult * leftmostCol.childNodes[cutoffPoint].offsetHeight <= rightColHeight
+						|| i === bestNbrRightCols - 1)) {
+					newCol.appendChild(leftmostCol.childNodes[cutoffPoint]);
+				}
 			}
 		};
 
