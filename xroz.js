@@ -3,11 +3,12 @@
 // Copyright 2011, Alex Stangl. All Rights Reserved.
 // Licensed under ISC license (see LICENSE file)
 
-//TODO remove this.textContainer (replaced with leftContainer and rightContainer)
+//TODO Improve look of help
+//TODO Support selecting/reading PUZ files from local filesystem
 //TODO handle shift or ctrl-arrow to jump by word
-//TODO if browser doesn't support canvas, possibly fallback to using a table
-//TODO implement backspace, Tab, Shift-Tab
+//TODO implement backspace
 //TODO consider switching to NSEW direction and showing a light arrow in cursor cell
+//TODO if browser doesn't support canvas, possibly fallback to using a table
 //TODO handle hovering over clues/squares causing light highlight/cursor response
 //TODO tweak multicolumn layout to improve look
 //TODO figure out whether using canvas is even a good idea (e.g., versus a table)
@@ -48,11 +49,12 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 		}
 	}
 
+	// get a binary byte from a string (bytes) at position offset
 	function getByte(bytes, offset) {
 		return bytes.charCodeAt(offset) % 256;
 	}
 
-	// repeatedly pop items from start of array adding them to accumulator until either
+	// pop items from end of array adding them to accumulator until either
 	// array exhausted or next element from array would cause accumulator to exceed threshold
 	// returns accumulator. arr is destructively modified, reflecting all the pops.
 	function popWhileLessThanOrEqual(threshold, arr) {
@@ -63,13 +65,24 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 		return acc;
 	}
 
-	// sum array
+	// return sum of all numbers in array
 	function sumArray(arr) {
 		var acc = 0, i;
 		for (i = 0; i < arr.length; ++i) {
 			acc += arr[i];
 		}
 		return acc;
+	}
+
+	// return index of first occurrence of specified element in array, or -1 if not found
+	function findInArray(arr, element) {
+		var i;
+		for (i = 0; i < arr.length; ++i) {
+			if (arr[i] === element) {
+				return i;
+			}
+		}
+		return -1;
 	}
 
 	function Puz() {
@@ -100,8 +113,9 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 
 		// immutable fields (unchanged after initialization): CONSTANTS, solution, url,
 		//      supportsLocalStorage, width, height, gext, acrossWordNbrs, downWordNbrs,
-		//      padding (for now), sqNbrs, textContainer, strings, canv, minPixmult
+		//      padding (for now), sqNbrs, strings, canv, minPixmult
 		//      version, nbrClues, acrossClues, downClues, leftContainer, rightContainer
+		//      acrossSqNbrs, downSqNbrs
 		// mutable fields: cursorX, cursorY, grid, pixmult, direction, revealSolution,
 		//      highlightWordNbr, showingHelp,
 		//      direction, highlightWordExtent, highlightClueId, lastClickX, lastClickY
@@ -144,6 +158,9 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 		};
 		this.toIndex = function (x, y) {
 			return y * this.width + x;
+		};
+		this.fromIndex = function (index) {
+			return [index % this.width, Math.floor(index / this.width)];
 		};
 		this.isBlack = function (x, y) {
 			return this.solution.charAt(this.toIndex(x, y)) === '.';
@@ -233,6 +250,26 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 			}
 		};
 
+		// create new column, pouring clues into it from the previous column's cutoff point
+		// If not trying to squeeze onto screen or align with canvas, allowOverflow = true allows
+		// a row to exceed cutoff by half its height. This yields better results in overflow scenarios.
+		// returns [newCol, newCutoffPoint]
+		this.createColumn = function (container, width, margin, prevCol, cutoffPoint, colHeight, allowOverflow) {
+			var newCol = document.createElement("div"), rowHeight, newCutoffPoint;
+			newCol.style.marginRight = margin + "px";
+			newCol.style.cssFloat = "left";
+			newCol.style.width = width + "px";
+			container.appendChild(newCol);
+			while (cutoffPoint < prevCol.childNodes.length) {
+				rowHeight = prevCol.childNodes[cutoffPoint].offsetHeight;
+				newCol.appendChild(prevCol.childNodes[cutoffPoint]);
+				if (newCol.offsetHeight <= colHeight || (allowOverflow && newCol.offsetHeight - rowHeight / 2 <= colHeight)) {
+					newCutoffPoint = newCol.childNodes.length;
+				}
+			}
+			return [newCol, newCutoffPoint];
+		};
+
 		// Attempt to optimize layout by squeezing all clues onto screen, if possible, else minimize
 		// scrolling necessary. If able to squeeze all on screen, center content nice & evenly.
 		// First find optimal column width by trying all widths from min to max & find which
@@ -242,16 +279,20 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 		// be squeezing it in so tight that that really matters, so we will always assume space
 		// for scrollbar.
 		this.optimizeLayout = function () {
-			var i, j, colWidth, bestWidth = 150, fitsWindow = false, heights, extraWidth,
+			var i, j, colWidth, bestWidth = 150, fitsWithoutOverflow = false, heights, extraWidth,
 				bestExtraWidth = 0, overflowY, bestOverflowY = 2E38, nbrLeftCols, nbrRightCols,
-				bestNbrLeftCols, bestNbrRightCols, bestLeftHeight, bestRightHeight,
-				canvHeight = this.canv.height, canvWidth = this.canv.width, leftmostCol, newCol, cutoffPoint,
+				bestNbrLeftCols, bestNbrRightCols, r,
+				canvHeight = this.canv.height, canvWidth = this.canv.width, prevCol, cutoffPoint,
 				html = document.getElementsByTagName("html")[0], colGutter = this.MIN_CLUE_COLUMN_GUTTER_WIDTH,
 				innerHeight = html.clientHeight - this.BODY_MARGIN * 2,
 				innerWidth = html.clientWidth - this.BODY_MARGIN * 2, colsToRemove, leftColHeight, rightColHeight;
+			if (innerWidth <= canvWidth) {
+				// screen is too narrow, so don't bother trying fancy layout
+				return;
+			}
 			this.leftContainer.style.overflow = "hidden";
-			leftColHeight = innerHeight;
-			rightColHeight = innerHeight - canvHeight;
+			leftColHeight = Math.max(innerHeight, canvHeight);
+			rightColHeight = Math.max(innerHeight - canvHeight, 0);
 			for (i = this.MIN_CLUE_COLUMN_WIDTH; i <= this.MAX_CLUE_COLUMN_WIDTH; i += 5) {
 				this.leftContainer.style.width = i + "px";
 				colWidth = i;
@@ -289,14 +330,14 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 					// anything left in heights is overflow;
 					// on the other hand, we may have underflow; one or more columns may not be full
 					if (heights.length === 0) {
-						fitsWindow = true;
-						if (extraWidth > bestExtraWidth) {
+						if (!fitsWithoutOverflow || extraWidth > bestExtraWidth) {
 							bestWidth = colWidth;
 							bestExtraWidth = extraWidth;
 							bestNbrLeftCols = nbrLeftCols;
 							bestNbrRightCols = nbrRightCols;
 						}
-					} else if (!fitsWindow) {
+						fitsWithoutOverflow = true;
+					} else if (!fitsWithoutOverflow) {
 						// normalize overflow by dividing by total # of columns, rounding up
 						overflowY = Math.ceil(sumArray(heights) / (nbrLeftCols + nbrRightCols));
 						if (overflowY < bestOverflowY) {
@@ -308,73 +349,57 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 					}
 				}
 			}
-			bestLeftHeight = fitsWindow ? innerHeight : innerHeight + bestOverflowY;
-			bestRightHeight = fitsWindow ? innerHeight - canvHeight : innerHeight - canvHeight + bestOverflowY;
+			if (!fitsWithoutOverflow) {
+				leftColHeight += bestOverflowY;
+				rightColHeight += bestOverflowY;
+			}
 			i = Math.floor(bestExtraWidth / 2);
 			this.leftContainer.style.marginLeft = i + "px";
 			this.leftContainer.style.width = (innerWidth - this.canv.width - bestExtraWidth) + "px";
-			leftmostCol = document.createElement("div");
-			leftmostCol.style.marginRight = this.MIN_CLUE_COLUMN_GUTTER_WIDTH + "px";
-			leftmostCol.style.cssFloat = "left";
-			leftmostCol.style.width = bestWidth + "px";
-			this.leftContainer.appendChild(leftmostCol);
+			prevCol = document.createElement("div");
+			prevCol.style.marginRight = this.MIN_CLUE_COLUMN_GUTTER_WIDTH + "px";
+			prevCol.style.cssFloat = "left";
+			prevCol.style.width = bestWidth + "px";
+			this.leftContainer.appendChild(prevCol);
 			// pour all content from leftContainer into first column, so we have correct sizing to refer to
-			while (this.leftContainer.firstChild !== leftmostCol) {
-				leftmostCol.appendChild(this.leftContainer.firstChild);
-				if (leftmostCol.offsetHeight <= bestLeftHeight) {
-					cutoffPoint = leftmostCol.childNodes.length;   // note cutoff for first column
+			while (this.leftContainer.firstChild !== prevCol) {
+				prevCol.appendChild(this.leftContainer.firstChild);
+				if (prevCol.offsetHeight <= leftColHeight) {
+					cutoffPoint = prevCol.childNodes.length;   // note cutoff for first column
 				}
 			}
 			for (i = 1; i < bestNbrLeftCols; ++i) {
-				newCol = document.createElement("div");
-				newCol.style.marginRight = this.MIN_CLUE_COLUMN_GUTTER_WIDTH + "px";
-				newCol.style.cssFloat = "left";
-				newCol.style.width = bestWidth + "px";
-				this.leftContainer.appendChild(newCol);
-				while (cutoffPoint < leftmostCol.childNodes.length && newCol.offsetHeight + leftmostCol.childNodes[cutoffPoint].offsetHeight <= bestLeftHeight) {
-					newCol.appendChild(leftmostCol.childNodes[cutoffPoint]);
-				}
+				r = this.createColumn(this.leftContainer, bestWidth, this.MIN_CLUE_COLUMN_GUTTER_WIDTH,
+					prevCol, cutoffPoint, leftColHeight, !fitsWithoutOverflow);
+				prevCol = r[0];
+				cutoffPoint = r[1];
 			}
 			for (i = 0; i < bestNbrRightCols; ++i) {
-				newCol = document.createElement("div");
-				newCol.style.marginRight = (i === bestNbrRightCols - 1 ? 0 : this.MIN_CLUE_COLUMN_GUTTER_WIDTH) + "px";
-				newCol.style.cssFloat = "left";
-				newCol.style.width = bestWidth + "px";
-				this.rightContainer.appendChild(newCol);
-				while (cutoffPoint < leftmostCol.childNodes.length && newCol.offsetHeight + leftmostCol.childNodes[cutoffPoint].offsetHeight <= bestRightHeight) {
-					newCol.appendChild(leftmostCol.childNodes[cutoffPoint]);
-				}
+				r = this.createColumn(this.rightContainer, bestWidth, i === bestNbrRightCols - 1 ? 0 : this.MIN_CLUE_COLUMN_GUTTER_WIDTH,
+					prevCol, cutoffPoint, rightColHeight, !fitsWithoutOverflow);
+				prevCol = r[0];
+				cutoffPoint = r[1];
 			}
 		};
 
-		// add set of clues to DOM
+		// add set of clues to DOM left container
 		this.addCluesToDOM = function (clues, idPrefix) {
-			var textContainer = this.textContainer,
-				x,
-				tbl,
-				tr,
-				td,
-				dv;
-			tbl = textContainer; /* document.createElement("table"); */
-			//textContainer.appendChild(tbl);
-			for (x = 0; x < clues.length; x += 2) {
-				//tr = appendChild(tbl, "tr");
-				dv = appendChild(tbl, "div");
+			var leftContainer = this.leftContainer, i, row, dv;
+			for (i = 0; i < clues.length; i += 2) {
+				dv = appendChild(leftContainer, "div");
 				dv.style.position = "relative";
-				//tr = appendChild(tbl, "div");
-				tr = appendChild(dv, "div");
-				tr.id = idPrefix + clues[x];
-				//td = appendChild(tr, "td");
-				td = appendChild(tr, "div");
-				td.style.position = "absolute";
-				td.style.left = "-1em";
-				td.style.textAlign = "right";
-				td.style.width = "3em";
-				td.style.fontWeight = "bold";
-				td.appendChild(document.createTextNode(clues[x]));
-				td = appendChild(tr, "div");
-				td.style.marginLeft = "2.2em";
-				td.appendChild(document.createTextNode(this.strings[3 + clues[x + 1]]));
+				row = appendChild(dv, "div");
+				row.id = idPrefix + clues[i];
+				dv = appendChild(row, "div");
+				dv.style.position = "absolute";
+				dv.style.left = "-1em";
+				dv.style.textAlign = "right";
+				dv.style.width = "3em";
+				dv.style.fontWeight = "bold";
+				dv.appendChild(document.createTextNode(clues[i]));
+				dv = appendChild(row, "div");
+				dv.style.marginLeft = "2.2em";
+				dv.appendChild(document.createTextNode(this.strings[3 + clues[i + 1]]));
 			}
 		};
 
@@ -449,7 +474,7 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 		};
 
 		this.drawBody = function () {
-			var textContainer = this.textContainer,
+			var leftContainer = this.leftContainer,
 				dv = document.createElement("div");
 			dv.id = "help";
 			dv.style.display = "none";
@@ -459,25 +484,30 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 			dv.style.padding = "4px";
 			appendText("Arrow keys move cursor.", dv);
 			appendText("Letter keys enter letter.", dv, true);
+			appendText("Tab moves to next word in current direction.", dv, true);
+			appendText("Shift-Tab moves to prev. word in current direction.", dv, true);
+			appendText("DEL or _ clears current square.", dv, true);
+			appendText("+/- zooms in/out of puzzle grid.", dv, true);
 			appendText("? shows help.", dv, true);
 			appendText("! reveals complete solution.", dv, true);
 			appendText("@ fills current square with correct letter.", dv, true);
 			appendText("Ctrl-R clears all cells (resets grid)", dv, true);
 			appendText("Mouse click changes cursor position.", dv, true);
 			appendText("Mouse click in same cell toggles direction.", dv, true);
-			textContainer.appendChild(dv);
+			appendText("Space toggles direction.", dv, true);
+			leftContainer.appendChild(dv);
 			this.showingHelp = false;
 
-			dv = appendChild(textContainer, "div");
+			dv = appendChild(leftContainer, "div");
 			appendText(this.strings[0], dv);
 			appendText(this.strings[1], dv, true);
-			dv = appendChild(textContainer, "div");
+			dv = appendChild(leftContainer, "div");
 			dv.style.paddingTop = "60px";
 			dv.style.paddingLeft = "40px";
 			appendText("ACROSS", appendChild(dv, "b"));
 			this.addCluesToDOM(this.acrossClues, "acrossClue");
 
-			dv = appendChild(textContainer, "div");
+			dv = appendChild(leftContainer, "div");
 			dv.style.paddingTop = "60px";
 			dv.style.paddingLeft = "40px";
 			appendText("DOWN", appendChild(dv, "b"));
@@ -647,6 +677,26 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 				this.cursorMove(this.moveDownAndOkToMoveAgain);
 			}
 		};
+		this.clueMove = function (sqNbrs, wordNbrs, inc) {
+			var oldx = this.cursorX, oldy = this.cursorY, curWordNbr = this.getWordNbr(oldx, oldy), ctx = this.canv.getContext("2d"), i, newXY;
+			i = findInArray(sqNbrs, curWordNbr) + inc;
+			if (i >= 0 && i < sqNbrs.length) {
+				newXY = this.fromIndex(findInArray(wordNbrs, sqNbrs[i]));
+				this.cursorX = newXY[0];
+				this.cursorY = newXY[1];
+				this.unhighlightWord();
+				this.highlightWord();
+				this.fillCell(oldx, oldy, ctx);
+				this.fillCell(this.cursorX, this.cursorY, ctx);
+			}
+		};
+		this.nextClue = function (inc) {
+			if (this.direction === this.DIRECTION_ACROSS) {
+				this.clueMove(this.acrossSqNbrs, this.acrossWordNbrs, inc);
+			} else if (this.direction === this.DIRECTION_DOWN) {
+				this.clueMove(this.downSqNbrs, this.downWordNbrs, inc);
+			}
+		};
 		this.insert = function (charToInsert) {
 			var index = this.toIndex(this.cursorX, this.cursorY),
 				ctx = this.canv.getContext("2d");
@@ -666,6 +716,13 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 				}
 			}
 		};
+
+		// add canvas element to rightContainer
+		this.addCanvasToRightContainer = function () {
+			this.canv = appendChild(appendChild(this.rightContainer, "div"), "canvas");
+			appendText("Your browser needs to support HTML5 canvas in order to view this page properly.", this.canv, false);
+		};
+
 
 		// onkeydown event handler
 		this.onkeydown = function (e) {
@@ -689,6 +746,12 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 				this.insert(" ");
 				this.saveState();
 				// block delete key event propagation
+				e.preventDefault();
+				return false;
+			}
+			if (kc === 9) {
+				this.nextClue(e.shiftKey ? -1 : 1);
+				// block Tab key event propagation
 				e.preventDefault();
 				return false;
 			}
@@ -768,6 +831,15 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 			};
 		};
 
+		// on resize event, redraw screen with potentially new layout
+		this.onresize = function () {
+			removeChildren(this.leftContainer);
+			removeChildren(this.rightContainer);
+			this.addCanvasToRightContainer();
+			this.drawCanvas();
+			this.drawBody();
+		};
+
 		this.minPixmult = 22;
 		this.pixmult = this.minPixmult;
 		this.padding = 5;
@@ -842,6 +914,8 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 			sqNbrs = [],
 			downWordNbrs = [],
 			acrossWordNbrs = [],
+			acrossSqNbrs = [],
+			downSqNbrs = [],
 			sectName,
 			len,
 			chksum,
@@ -878,10 +952,12 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 					if (saw) {
 						acrossClues.push(sqNbr);
 						acrossClues.push(clueNum++);
+						acrossSqNbrs.push(sqNbr);
 					}
 					if (sdw) {
 						downClues.push(sqNbr);
 						downClues.push(clueNum++);
+						downSqNbrs.push(sqNbr);
 					}
 					sqNbr++;
 				}
@@ -892,6 +968,8 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 		retval.sqNbrs = sqNbrs;
 		retval.acrossWordNbrs = acrossWordNbrs;
 		retval.downWordNbrs = downWordNbrs;
+		retval.acrossSqNbrs = acrossSqNbrs;
+		retval.downSqNbrs = downSqNbrs;
 		while (offset < bytes.length) {
 			sectName = bytes.substring(offset, offset + 4);
 			len = getShort(bytes, offset + 4);
@@ -926,22 +1004,21 @@ var ActiveXObject, parsedPuz, filecontents, PUZAPP = {};
 		divl.style.cssFloat = "left";
 		divr.style.cssFloat = "left";
 		PUZAPP.puz = parsedPuz;
-		parsedPuz.canv = appendChild(appendChild(divr, "div"), "canvas");
-		appendText("Your browser needs to support HTML5 canvas in order to view this page properly.", parsedPuz.canv, false);
-		parsedPuz.textContainer = divl;
 		parsedPuz.leftContainer = divl;
 		parsedPuz.rightContainer = divr;
+		parsedPuz.addCanvasToRightContainer();
 		parsedPuz.url = puzUrl;
 		parsedPuz.restoreState();
 		// cursor right then left should leave cursor on first empty square, in case corner is black
-		PUZAPP.puz.drawCanvas();
-		PUZAPP.puz.drawBody();
+		parsedPuz.drawCanvas();
+		parsedPuz.drawBody();
 		parsedPuz.cursorRight();
 		parsedPuz.cursorLeft();
 		parsedPuz.highlightWord();
 		document.onkeypress = function (e) { return parsedPuz.onkeypress(e); };
 		document.onclick = function (e) { return parsedPuz.onclick(e); };
 		document.onkeydown = function (e) { return parsedPuz.onkeydown(e); };
+		window.onresize = function (e) { return parsedPuz.onresize(e); };
 	}
 
 	function drawPuzzleById(puzUrl, puzContainerId) {
